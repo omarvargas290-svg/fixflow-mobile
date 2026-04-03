@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -241,6 +242,12 @@ const SUPPLIER_CATALOG: Record<string, Supplier[]> = {
 };
 
 function resolveBackendUrl() {
+  if (typeof window !== "undefined" && Platform.OS === "web") {
+    const params = new URLSearchParams(window.location.search);
+    const runtimeApi = params.get("api");
+    if (runtimeApi) return runtimeApi;
+  }
+
   const configured =
     process.env.EXPO_PUBLIC_API_URL ||
     (Constants.expoConfig?.extra?.apiUrl as string) ||
@@ -359,42 +366,42 @@ function buildAuthHeaders(token: string) {
 function createPalette(mode: "light" | "dark") {
   if (mode === "dark") {
     return {
-      background: "#07111f",
-      surface: "#0f1b2d",
-      surfaceAlt: "#14243b",
-      border: "#223553",
-      text: "#f4f7fb",
-      textMuted: "#93a7c2",
-      primary: "#6ee7f9",
-      primaryStrong: "#22d3ee",
-      primaryText: "#082f49",
-      secondary: "#16263d",
-      secondaryText: "#dbe7f5",
+      background: "#06101d",
+      surface: "#0f1f35",
+      surfaceAlt: "#172a45",
+      border: "#244163",
+      text: "#f7fbff",
+      textMuted: "#9db2cf",
+      primary: "#38bdf8",
+      primaryStrong: "#0f4cdd",
+      primaryText: "#effbff",
+      secondary: "#19304f",
+      secondaryText: "#d8e9ff",
       success: "#34d399",
       danger: "#fb7185",
       warning: "#fbbf24",
-      overlay: "#0d1a2b",
-      accent: "#8b5cf6",
+      overlay: "#14304c",
+      accent: "#a78bfa",
     };
   }
 
   return {
-    background: "#f4f7fb",
+    background: "#edf4ff",
     surface: "#ffffff",
-    surfaceAlt: "#edf3fb",
-    border: "#d8e1ef",
-    text: "#152033",
-    textMuted: "#64748b",
-    primary: "#1d4ed8",
-    primaryStrong: "#1e40af",
+    surfaceAlt: "#f3f7ff",
+    border: "#d6e3f8",
+    text: "#16233b",
+    textMuted: "#5f728f",
+    primary: "#2563eb",
+    primaryStrong: "#1d4ed8",
     primaryText: "#ffffff",
-    secondary: "#eef4fb",
+    secondary: "#e8f1ff",
     secondaryText: "#1d4ed8",
     success: "#16a34a",
     danger: "#e11d48",
     warning: "#d97706",
-    overlay: "#e7eefc",
-    accent: "#7c3aed",
+    overlay: "#dbeafe",
+    accent: "#8b5cf6",
   };
 }
 
@@ -404,6 +411,13 @@ function modeAwareText(background: string, palette: ReturnType<typeof createPale
 
 function displayNumberInput(value: number) {
   return value ? String(value) : "";
+}
+
+function formatDateOnly(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function inferSupplierZone(address: string) {
@@ -461,6 +475,11 @@ function AppContent() {
   const [view, setView] = useState("dashboard");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [activePopup, setActivePopup] = useState<null | "order" | "inventory" | "business" | "user">(null);
+  const [showOrderComposer, setShowOrderComposer] = useState(false);
+  const [showOrderDetails, setShowOrderDetails] = useState(false);
+  const [orderEditorSection, setOrderEditorSection] = useState<"customer" | "device" | "financial">("customer");
+  const [firstRunPromptShown, setFirstRunPromptShown] = useState(false);
   const [orderQuery, setOrderQuery] = useState("");
   const [orderStatusFilter, setOrderStatusFilter] = useState("all");
   const [orderTechnicianFilter, setOrderTechnicianFilter] = useState("all");
@@ -502,6 +521,14 @@ function AppContent() {
   const isWeb = Platform.OS === "web";
   const isTablet = width >= 768;
   const isDesktop = width >= 1080;
+  const desktopModeLabel = useMemo(() => {
+    if (!isWeb || typeof window === "undefined") return "";
+    const mode = new URLSearchParams(window.location.search).get("desktopMode");
+    if (mode === "cloud") return "Modo nube";
+    if (mode === "local") return "Modo local";
+    return "";
+  }, [isWeb]);
+  const allowSelfRegistration = desktopModeLabel !== "Modo local";
   const sidebarEnabled = isWeb && isDesktop;
   const contentMaxWidth = isWeb ? Math.min(width - 32, 1180) : width - 32;
   const metricCardWidth = isDesktop
@@ -541,6 +568,29 @@ function AppContent() {
   }, [session]);
 
   useEffect(() => {
+    if (!allowSelfRegistration && authMode !== "login") {
+      setAuthMode("login");
+    }
+  }, [allowSelfRegistration, authMode]);
+
+  useEffect(() => {
+    if (!session) {
+      setFirstRunPromptShown(false);
+      return;
+    }
+    if (!isAdmin || !settingsForm || firstRunPromptShown) return;
+    if (String(settingsForm.businessName || "").trim()) return;
+    setFirstRunPromptShown(true);
+    setActivePopup("business");
+  }, [session, isAdmin, settingsForm, firstRunPromptShown]);
+
+  useEffect(() => {
+    if (orderForm.id) {
+      setShowOrderComposer(true);
+    }
+  }, [orderForm.id]);
+
+  useEffect(() => {
     setOrdersLimit(20);
   }, [orderQuery, orderStatusFilter, orderTechnicianFilter, orderDateFrom, orderDateTo]);
 
@@ -551,6 +601,10 @@ function AppContent() {
   const selectedOrder = useMemo(
     () => (Array.isArray(store?.orders) ? store!.orders.find((order) => order.id === selectedOrderId) || store!.orders[0] || null : null),
     [store, selectedOrderId]
+  );
+  const selectedInventoryItem = useMemo(
+    () => (Array.isArray(store?.inventory) ? store!.inventory.find((item) => item.id === inventoryForm.id) || null : null),
+    [store, inventoryForm.id]
   );
 
   const filteredOrders = useMemo(() => {
@@ -849,6 +903,8 @@ function AppContent() {
       await saveStore({ ...store, orders: nextOrders });
       setSelectedOrderId(nextOrder.id);
       setOrderForm(createEmptyOrder(session.name));
+      setShowOrderComposer(false);
+      setOrderEditorSection("customer");
       Alert.alert("Ordenes", orderForm.id ? "Orden actualizada" : "Orden creada");
     } catch {
       Alert.alert("Ordenes", "No se pudo guardar la orden");
@@ -936,6 +992,18 @@ function AppContent() {
     }
   }
 
+  function openOrderComposer(section: "customer" | "device" | "financial" = "customer", order?: Order) {
+    setOrderEditorSection(section);
+    setShowOrderComposer(true);
+    setActivePopup("order");
+    if (order) {
+      setOrderForm(order);
+      setSelectedOrderId(order.id);
+    } else if (session) {
+      setOrderForm(createEmptyOrder(session.name));
+    }
+  }
+
   async function onExportOrdersReport() {
     if (!store) return;
 
@@ -966,7 +1034,7 @@ function AppContent() {
     </style>
   </head>
   <body>
-    <h1>${escapeHtml(store.settings.businessName || "FixFlow")}</h1>
+    <h1>${escapeHtml(store.settings.businessName || "FixFlow Taller")}</h1>
     <p class="meta">Reporte de ordenes | Estado: ${escapeHtml(orderStatusFilter)} | Tecnico: ${escapeHtml(orderTechnicianFilter)} | Desde: ${escapeHtml(orderDateFrom || "N/D")} | Hasta: ${escapeHtml(orderDateTo || "N/D")}</p>
     <table>
       <thead>
@@ -1016,6 +1084,7 @@ function AppContent() {
     try {
       await saveStore({ ...store, inventory: nextItems });
       setInventoryForm({ id: "", name: "", sku: "", category: "", stock: 0, minStock: 0, cost: 0, supplierId: "" });
+      setActivePopup(null);
     } catch {
       Alert.alert("Inventario", "No se pudo guardar el repuesto");
     } finally {
@@ -1069,6 +1138,7 @@ function AppContent() {
 
       await loadBootstrap(backendMode === "modern" ? sessionToken : "");
       setNewUser({ name: "", email: "", role: "", password: "" });
+      setActivePopup(null);
     } catch {
       Alert.alert("Usuarios", "No se pudo crear el usuario");
     } finally {
@@ -1184,12 +1254,29 @@ function AppContent() {
     try {
       const dynamicSuppliers = getSuppliersForAddress(settingsForm.address);
       await saveStore({ ...store, settings: settingsForm, suppliers: dynamicSuppliers });
+      setActivePopup(null);
       Alert.alert("Configuracion", "Datos del negocio actualizados");
     } catch {
       Alert.alert("Configuracion", "No se pudo guardar la configuracion");
     } finally {
       setIsBusy(false);
     }
+  }
+
+  function openInventoryEditor(item?: InventoryItem) {
+    if (item) {
+      setInventoryForm(item);
+    } else {
+      setInventoryForm({ id: "", name: "", sku: "", category: "", stock: 0, minStock: 0, cost: 0, supplierId: "" });
+    }
+    setActivePopup("inventory");
+  }
+
+  function setQuickEta(daysFromToday: number) {
+    const nextDate = new Date();
+    nextDate.setHours(0, 0, 0, 0);
+    nextDate.setDate(nextDate.getDate() + daysFromToday);
+    setOrderForm((current) => ({ ...current, eta: formatDateOnly(nextDate) }));
   }
 
   async function onRefreshStore() {
@@ -1210,7 +1297,7 @@ function AppContent() {
       <SafeAreaView style={[styles.centerScreen, { backgroundColor: palette.background }]}>
         <StatusBar style={settingsForm?.themeMode === "dark" ? "light" : "dark"} />
         <ActivityIndicator size="large" color={palette.primary} />
-        <Text style={[styles.loadingText, { color: palette.text }]}>Cargando FixFlow Mobile...</Text>
+        <Text style={[styles.loadingText, { color: palette.text }]}>Cargando FixFlow Taller...</Text>
       </SafeAreaView>
     );
   }
@@ -1222,7 +1309,7 @@ function AppContent() {
         <View style={[styles.loginShell, isWeb && styles.loginShellWeb]}>
           <View style={[styles.loginFrame, isTablet && styles.loginFrameWide]}>
             <View style={[styles.loginIntro, { backgroundColor: palette.primaryStrong }]}>
-              <Text style={[styles.badge, { color: "#dbeafe" }]}>FixFlow Suite</Text>
+              <Text style={[styles.badge, { color: "#dbeafe" }]}>FixFlow Taller</Text>
               <Text style={styles.loginHeroTitle}>Controla ordenes, inventario y tickets desde una sola vista.</Text>
               <Text style={styles.loginHeroText}>Una interfaz mas clara para mostrador, tecnico y administracion.</Text>
               <View style={styles.loginFeatureStack}>
@@ -1237,7 +1324,11 @@ function AppContent() {
               <Text style={[styles.badge, { color: palette.primary }]}>{authMode === "login" ? "Acceso seguro" : "Solicitud de acceso"}</Text>
               <Text style={[styles.title, { color: palette.text }]}>{authMode === "login" ? "Inicia sesion" : "Crear cuenta"}</Text>
               <Text style={[styles.cardText, { color: palette.textMuted }]}>
-                {authMode === "login" ? "Ingresa con tu cuenta para continuar al panel del taller." : "Tu registro quedara pendiente hasta aprobacion del administrador."}
+                {authMode === "login"
+                  ? (allowSelfRegistration
+                    ? "Ingresa con tu cuenta para continuar al panel del taller."
+                    : "Ingresa con tu cuenta local. Los accesos nuevos los crea el administrador desde Ajustes.")
+                  : "Tu registro quedara pendiente hasta aprobacion del administrador."}
               </Text>
               {authMode === "login" ? (
                 <>
@@ -1246,9 +1337,11 @@ function AppContent() {
                   <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onLogin} disabled={isBusy}>
                     <Text style={[styles.primaryText, primaryTextThemeStyle]}>Entrar al panel</Text>
                   </Pressable>
-                  <Pressable style={[styles.secondaryButton, secondaryButtonThemeStyle]} onPress={() => setAuthMode("register")} disabled={isBusy}>
-                    <Text style={[styles.secondaryText, secondaryTextThemeStyle]}>Solicitar acceso</Text>
-                  </Pressable>
+                  {allowSelfRegistration ? (
+                    <Pressable style={[styles.secondaryButton, secondaryButtonThemeStyle]} onPress={() => setAuthMode("register")} disabled={isBusy}>
+                      <Text style={[styles.secondaryText, secondaryTextThemeStyle]}>Solicitar acceso</Text>
+                    </Pressable>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -1279,7 +1372,7 @@ function AppContent() {
           <View>
             <Text style={[styles.badge, { color: palette.primary }]}>{store.settings.businessName || "Tu taller"}</Text>
             <Text style={[styles.headerTitle, { color: palette.text }]}>{session.name}</Text>
-            <Text style={[styles.subtitle, { color: palette.textMuted }]}>{session.role} - {store.ownerUserId}</Text>
+            <Text style={[styles.subtitle, { color: palette.textMuted }]}>{session.role} - {store.ownerUserId}{desktopModeLabel ? ` · ${desktopModeLabel}` : ""}</Text>
           </View>
           <Pressable
             style={[styles.ghostButton, { backgroundColor: palette.secondary, borderColor: palette.border }]}
@@ -1343,7 +1436,7 @@ function AppContent() {
                 style={[styles.primaryButton, primaryButtonThemeStyle]}
                 onPress={() => {
                   setView("orders");
-                  setOrderForm(createEmptyOrder(session.name));
+                  openOrderComposer("customer");
                 }}
               >
                 <Text style={[styles.primaryText, primaryTextThemeStyle]}>Nueva orden</Text>
@@ -1410,7 +1503,7 @@ function AppContent() {
                     style={[styles.primaryButton, primaryButtonThemeStyle]}
                     onPress={() => {
                       setView("orders");
-                      setOrderForm(createEmptyOrder(session.name));
+                      openOrderComposer("customer");
                     }}
                   >
                     <Text style={[styles.primaryText, primaryTextThemeStyle]}>Agregar orden</Text>
@@ -1569,8 +1662,7 @@ function AppContent() {
                           <Pressable
                             style={[styles.smallButton, smallButtonThemeStyle]}
                             onPress={() => {
-                              setSelectedOrderId(order.id);
-                              setOrderForm(order);
+                              openOrderComposer("customer", order);
                             }}
                           >
                             <Text style={[styles.smallButtonText, smallButtonTextThemeStyle]}>Editar</Text>
@@ -1590,8 +1682,7 @@ function AppContent() {
                         <Pressable
                           style={[styles.smallButton, smallButtonThemeStyle]}
                           onPress={() => {
-                            setSelectedOrderId(order.id);
-                            setOrderForm(order);
+                            openOrderComposer("customer", order);
                           }}
                         >
                           <Text style={[styles.smallButtonText, smallButtonTextThemeStyle]}>Editar</Text>
@@ -1611,7 +1702,7 @@ function AppContent() {
                 <View style={[styles.sectionPanelHeader, { backgroundColor: palette.surface, borderColor: palette.border }]}>
                   <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{orderForm.id ? "Edicion de orden" : "Nueva orden"}</Text>
                   <Text style={[styles.cardText, cardTextThemeStyle]}>
-                    {orderForm.id ? "Actualiza la orden seleccionada y guarda los cambios." : "Captura una nueva orden sin mezclarla con el listado operativo."}
+                    {orderForm.id ? "Actualiza la orden seleccionada y guarda los cambios." : "Abre solo el bloque que quieres capturar: cliente, dispositivo o cobro."}
                   </Text>
                 </View>
                 {selectedOrder ? (
@@ -1637,6 +1728,9 @@ function AppContent() {
                       </View>
                     </View>
                     <View style={styles.navRow}>
+                      <Pressable style={[styles.smallButton, neutralButtonThemeStyle]} onPress={() => setShowOrderDetails((current) => !current)}>
+                        <Text style={[styles.smallButtonText, neutralTextThemeStyle]}>{showOrderDetails || sidebarEnabled ? "Ocultar detalle" : "Ver detalle"}</Text>
+                      </Pressable>
                       {["received", "in_progress", "waiting_parts", "ready", "delivered"].map((status) => (
                         <Pressable key={status} style={[styles.smallButton, neutralButtonThemeStyle]} onPress={() => onChangeOrderStatus(status)}>
                           <Text style={[styles.smallButtonText, smallButtonTextThemeStyle]}>{statusLabel(status)}</Text>
@@ -1646,17 +1740,19 @@ function AppContent() {
                         <Text style={[styles.smallButtonText, secondaryTextThemeStyle]}>Ticket</Text>
                       </Pressable>
                     </View>
-                    <View style={styles.timelineBlock}>
-                      {selectedOrder.timeline.map((step, index) => (
-                        <View key={`${step.label}-${index}`} style={styles.timelineRow}>
-                          <View style={[styles.timelineDot, step.state === "current" && styles.timelineDotCurrent, step.state === "done" && styles.timelineDotDone]} />
-                          <View style={styles.timelineCopy}>
-                            <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{step.label}</Text>
-                            <Text style={[styles.cardText, cardTextThemeStyle]}>{step.at ? formatDate(step.at) : "Pendiente"}</Text>
+                    {(showOrderDetails || sidebarEnabled) ? (
+                      <View style={styles.timelineBlock}>
+                        {selectedOrder.timeline.map((step, index) => (
+                          <View key={`${step.label}-${index}`} style={styles.timelineRow}>
+                            <View style={[styles.timelineDot, step.state === "current" && styles.timelineDotCurrent, step.state === "done" && styles.timelineDotDone]} />
+                            <View style={styles.timelineCopy}>
+                              <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{step.label}</Text>
+                              <Text style={[styles.cardText, cardTextThemeStyle]}>{step.at ? formatDate(step.at) : "Pendiente"}</Text>
+                            </View>
                           </View>
-                        </View>
-                      ))}
-                    </View>
+                        ))}
+                      </View>
+                    ) : null}
                   </View>
                 ) : (
                   <View style={[styles.featurePanel, cardSurfaceStyle]}>
@@ -1666,26 +1762,33 @@ function AppContent() {
                 )}
 
                 <View style={[styles.formCard, cardSurfaceStyle]}>
-                  <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{orderForm.id ? "Editar orden" : "Nueva orden"}</Text>
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.customer} onChangeText={(value) => setOrderForm({ ...orderForm, customer: value })} placeholder="Cliente" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.phone} onChangeText={(value) => setOrderForm({ ...orderForm, phone: value })} placeholder="Telefono" keyboardType="phone-pad" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.whatsapp} onChangeText={(value) => setOrderForm({ ...orderForm, whatsapp: value })} placeholder="WhatsApp" keyboardType="phone-pad" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.brand} onChangeText={(value) => setOrderForm({ ...orderForm, brand: value })} placeholder="Marca" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.model} onChangeText={(value) => setOrderForm({ ...orderForm, model: value })} placeholder="Modelo" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.imei} onChangeText={(value) => setOrderForm({ ...orderForm, imei: value })} placeholder="IMEI o serie" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.issue} onChangeText={(value) => setOrderForm({ ...orderForm, issue: value })} placeholder="Falla reportada" multiline />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(orderForm.estimatedTotal)} onChangeText={(value) => setOrderForm({ ...orderForm, estimatedTotal: Number(value || 0) })} placeholder="Total estimado" keyboardType="numeric" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(orderForm.deposit)} onChangeText={(value) => setOrderForm({ ...orderForm, deposit: Number(value || 0) })} placeholder="Anticipo" keyboardType="numeric" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.eta} onChangeText={(value) => setOrderForm({ ...orderForm, eta: value })} placeholder="Fecha promesa YYYY-MM-DD" />
-                  <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onSaveOrder} disabled={isBusy}>
-                    <Text style={[styles.primaryText, primaryTextThemeStyle]}>{orderForm.id ? "Guardar orden" : "Crear orden"}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.secondaryButton, secondaryButtonThemeStyle]}
-                    onPress={() => setOrderForm(createEmptyOrder(session.name))}
-                  >
-                    <Text style={[styles.secondaryText, secondaryTextThemeStyle]}>Limpiar formulario</Text>
-                  </Pressable>
+                  <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Submenu de orden</Text>
+                  <Text style={[styles.cardText, cardTextThemeStyle]}>Usa una ventana emergente para capturar cliente, dispositivo o cobro sin llenar esta vista de campos.</Text>
+                  <View style={styles.compactActionRow}>
+                    <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, styles.primaryButtonCompact]} onPress={() => openOrderComposer("customer")}>
+                      <Text style={[styles.primaryText, primaryTextThemeStyle]}>Nueva orden</Text>
+                    </Pressable>
+                    {selectedOrder ? (
+                      <Pressable style={[styles.secondaryButton, secondaryButtonThemeStyle, styles.primaryButtonCompact]} onPress={() => openOrderComposer("customer", selectedOrder)}>
+                        <Text style={[styles.secondaryText, secondaryTextThemeStyle]}>Editar seleccionada</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                  <View style={[styles.quickStarterCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+                    <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Acceso rapido</Text>
+                    <Text style={[styles.cardText, cardTextThemeStyle]}>Cada boton abre una ventana con solo el bloque que necesitas.</Text>
+                    <View style={styles.compactActionRow}>
+                      <Pressable style={[styles.compactActionButton, secondaryButtonThemeStyle]} onPress={() => openOrderComposer("customer", orderForm.id ? orderForm : undefined)}>
+                        <Text style={[styles.compactActionText, secondaryTextThemeStyle]}>Cliente</Text>
+                      </Pressable>
+                      <Pressable style={[styles.compactActionButton, secondaryButtonThemeStyle]} onPress={() => openOrderComposer("device", orderForm.id ? orderForm : undefined)}>
+                        <Text style={[styles.compactActionText, secondaryTextThemeStyle]}>Dispositivo</Text>
+                      </Pressable>
+                      <Pressable style={[styles.compactActionButton, secondaryButtonThemeStyle]} onPress={() => openOrderComposer("financial", orderForm.id ? orderForm : undefined)}>
+                        <Text style={[styles.compactActionText, secondaryTextThemeStyle]}>Cobro</Text>
+                      </Pressable>
+                    </View>
+                  </View>
                 </View>
               </View>
             </View>
@@ -1779,22 +1882,30 @@ function AppContent() {
                   </Text>
                 </View>
                 <View style={[styles.formCard, cardSurfaceStyle]}>
-                  <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{inventoryForm.id ? "Editar repuesto" : "Nuevo repuesto"}</Text>
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.name} onChangeText={(v) => setInventoryForm({ ...inventoryForm, name: v })} placeholder="Nombre" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.sku} onChangeText={(v) => setInventoryForm({ ...inventoryForm, sku: v })} placeholder="SKU" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.category} onChangeText={(v) => setInventoryForm({ ...inventoryForm, category: v })} placeholder="Categoria" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(inventoryForm.stock)} onChangeText={(v) => setInventoryForm({ ...inventoryForm, stock: Number(v || 0) })} placeholder="Stock" keyboardType="numeric" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(inventoryForm.minStock)} onChangeText={(v) => setInventoryForm({ ...inventoryForm, minStock: Number(v || 0) })} placeholder="Minimo" keyboardType="numeric" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(inventoryForm.cost)} onChangeText={(v) => setInventoryForm({ ...inventoryForm, cost: Number(v || 0) })} placeholder="Costo" keyboardType="numeric" />
-                  <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.supplierId} onChangeText={(v) => setInventoryForm({ ...inventoryForm, supplierId: v })} placeholder="ID proveedor" />
-                  <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onSaveInventory} disabled={isBusy}>
-                    <Text style={[styles.primaryText, primaryTextThemeStyle]}>{inventoryForm.id ? "Guardar cambios" : "Agregar repuesto"}</Text>
-                  </Pressable>
-                  {inventoryForm.id ? (
-                    <Pressable style={[styles.secondaryButton, dangerButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onDeleteInventory} disabled={isBusy}>
-                      <Text style={[styles.secondaryText, dangerTextThemeStyle]}>Eliminar repuesto</Text>
+                  <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Submenu de inventario</Text>
+                  <Text style={[styles.cardText, cardTextThemeStyle]}>Edita repuestos en una ventana emergente para que la vista principal quede limpia.</Text>
+                  <View style={styles.compactActionRow}>
+                    <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, styles.primaryButtonCompact]} onPress={() => openInventoryEditor()}>
+                      <Text style={[styles.primaryText, primaryTextThemeStyle]}>Nuevo repuesto</Text>
                     </Pressable>
-                  ) : null}
+                    {selectedInventoryItem ? (
+                      <Pressable style={[styles.secondaryButton, secondaryButtonThemeStyle, styles.primaryButtonCompact]} onPress={() => openInventoryEditor(selectedInventoryItem)}>
+                        <Text style={[styles.secondaryText, secondaryTextThemeStyle]}>Editar seleccionado</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                  {selectedInventoryItem ? (
+                    <View style={[styles.quickStarterCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+                      <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{selectedInventoryItem.name}</Text>
+                      <Text style={[styles.cardText, cardTextThemeStyle]}>{selectedInventoryItem.sku} · {selectedInventoryItem.category}</Text>
+                      <Text style={[styles.cardText, cardTextThemeStyle]}>Stock {selectedInventoryItem.stock} · Min {selectedInventoryItem.minStock} · {money(selectedInventoryItem.cost, store.settings.currency)}</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.quickStarterCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+                      <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Sin repuesto seleccionado</Text>
+                      <Text style={[styles.cardText, cardTextThemeStyle]}>Selecciona una pieza del listado para editarla en popup.</Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={[styles.featurePanel, cardSurfaceStyle]}>
@@ -1829,34 +1940,16 @@ function AppContent() {
               <View style={[styles.formCard, cardSurfaceStyle, { width: splitColumnWidth }]}>
                 <View style={[styles.sectionPanelHeader, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
                   <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Identidad del negocio</Text>
-                  <Text style={[styles.cardText, cardTextThemeStyle]}>Configura nombre comercial, contacto y datos que apareceran en tickets.</Text>
+                  <Text style={[styles.cardText, cardTextThemeStyle]}>Deja el panel principal limpio y abre los cambios del negocio en una ventana aparte.</Text>
                 </View>
-                <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.businessName} onChangeText={(value) => setSettingsForm({ ...settingsForm, businessName: value })} placeholder="Nombre del negocio" />
-                <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.branchName} onChangeText={(value) => setSettingsForm({ ...settingsForm, branchName: value })} placeholder="Sucursal" />
-                <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.phone} onChangeText={(value) => setSettingsForm({ ...settingsForm, phone: value })} placeholder="Telefono" keyboardType="phone-pad" />
-                <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.whatsapp} onChangeText={(value) => setSettingsForm({ ...settingsForm, whatsapp: value })} placeholder="WhatsApp" keyboardType="phone-pad" />
-                <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.address} onChangeText={(value) => setSettingsForm({ ...settingsForm, address: value })} placeholder="Direccion" />
-                <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.ticketHeader} onChangeText={(value) => setSettingsForm({ ...settingsForm, ticketHeader: value })} placeholder="Encabezado de ticket" />
-                <View style={[styles.sectionPanelHeader, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
-                  <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Preferencias</Text>
-                  <Text style={[styles.cardText, cardTextThemeStyle]}>Controla el tema y la exposicion del seguimiento al cliente.</Text>
+                <View style={[styles.quickStarterCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+                  <Text style={[styles.cardTitle, cardTitleThemeStyle]}>{settingsForm.businessName || "Negocio sin nombre"}</Text>
+                  <Text style={[styles.cardText, cardTextThemeStyle]}>{settingsForm.branchName || "Sin sucursal"} · {settingsForm.phone || "Sin telefono"}</Text>
+                  <Text style={[styles.cardText, cardTextThemeStyle]}>{settingsForm.address || "Sin direccion configurada"}</Text>
+                  <Text style={[styles.cardText, cardTextThemeStyle]}>Tema: {settingsForm.themeMode === "dark" ? "Oscuro" : "Claro"} · Seguimiento: {settingsForm.publicTracking ? "Activo" : "Oculto"}</Text>
                 </View>
-                <View style={styles.switchRow}>
-                  <View style={styles.switchCopy}>
-                    <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Modo oscuro</Text>
-                    <Text style={[styles.cardText, cardTextThemeStyle]}>Activa una apariencia oscura para toda la app.</Text>
-                  </View>
-                  <Switch value={settingsForm.themeMode === "dark"} onValueChange={(value) => setSettingsForm({ ...settingsForm, themeMode: value ? "dark" : "light" })} />
-                </View>
-                <View style={styles.switchRow}>
-                  <View style={styles.switchCopy}>
-                    <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Seguimiento publico</Text>
-                    <Text style={[styles.cardText, cardTextThemeStyle]}>Permite compartir la liga de seguimiento al cliente.</Text>
-                  </View>
-                  <Switch value={settingsForm.publicTracking} onValueChange={(value) => setSettingsForm({ ...settingsForm, publicTracking: value })} />
-                </View>
-                <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onSaveSettings} disabled={isBusy}>
-                  <Text style={[styles.primaryText, primaryTextThemeStyle]}>Guardar negocio</Text>
+                <Pressable style={[styles.primaryButton, primaryButtonThemeStyle]} onPress={() => setActivePopup("business")}>
+                  <Text style={[styles.primaryText, primaryTextThemeStyle]}>Editar negocio</Text>
                 </Pressable>
               </View>
             )}
@@ -1900,14 +1993,10 @@ function AppContent() {
                   <View style={[styles.formCard, cardSurfaceStyle]}>
                     <View style={[styles.sectionPanelHeader, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
                       <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Alta manual de usuario</Text>
-                      <Text style={[styles.cardText, cardTextThemeStyle]}>Crea accesos internos desde administracion cuando no quieras usar el registro publico.</Text>
+                      <Text style={[styles.cardText, cardTextThemeStyle]}>Abre un popup para crear cuentas sin cargar esta vista con otro formulario.</Text>
                     </View>
-                    <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.name} onChangeText={(v) => setNewUser({ ...newUser, name: v })} placeholder="Nombre" />
-                    <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.email} onChangeText={(v) => setNewUser({ ...newUser, email: v })} placeholder="Correo" />
-                    <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.role} onChangeText={(v) => setNewUser({ ...newUser, role: v })} placeholder="Rol" />
-                    <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.password} onChangeText={(v) => setNewUser({ ...newUser, password: v })} placeholder="Contrasena" secureTextEntry />
-                    <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onCreateUser} disabled={isBusy}>
-                      <Text style={[styles.primaryText, primaryTextThemeStyle]}>Crear usuario</Text>
+                    <Pressable style={[styles.primaryButton, primaryButtonThemeStyle]} onPress={() => setActivePopup("user")}>
+                      <Text style={[styles.primaryText, primaryTextThemeStyle]}>Abrir alta manual</Text>
                     </Pressable>
                   </View>
                 ) : (
@@ -1924,6 +2013,171 @@ function AppContent() {
           </View>
         </View>
       </ScrollView>
+
+      <PopupWindow
+        visible={activePopup === "order"}
+        title={orderForm.id ? "Editar orden" : "Nueva orden"}
+        description="Captura solo el bloque necesario y vuelve al panel sin perder contexto."
+        palette={palette}
+        onClose={() => setActivePopup(null)}
+      >
+        <View style={styles.compactActionRow}>
+          <Pressable style={[styles.compactActionButton, orderEditorSection === "customer" ? primaryButtonThemeStyle : secondaryButtonThemeStyle]} onPress={() => setOrderEditorSection("customer")}>
+            <Text style={[styles.compactActionText, orderEditorSection === "customer" ? primaryTextThemeStyle : secondaryTextThemeStyle]}>Cliente</Text>
+          </Pressable>
+          <Pressable style={[styles.compactActionButton, orderEditorSection === "device" ? primaryButtonThemeStyle : secondaryButtonThemeStyle]} onPress={() => setOrderEditorSection("device")}>
+            <Text style={[styles.compactActionText, orderEditorSection === "device" ? primaryTextThemeStyle : secondaryTextThemeStyle]}>Dispositivo</Text>
+          </Pressable>
+          <Pressable style={[styles.compactActionButton, orderEditorSection === "financial" ? primaryButtonThemeStyle : secondaryButtonThemeStyle]} onPress={() => setOrderEditorSection("financial")}>
+            <Text style={[styles.compactActionText, orderEditorSection === "financial" ? primaryTextThemeStyle : secondaryTextThemeStyle]}>Cobro</Text>
+          </Pressable>
+        </View>
+
+        {orderEditorSection === "customer" ? (
+          <QuestionCard title="Cliente y contacto" description="Captura primero quien deja el equipo." palette={palette}>
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.customer} onChangeText={(value) => setOrderForm({ ...orderForm, customer: value })} placeholder="Cliente" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.phone} onChangeText={(value) => setOrderForm({ ...orderForm, phone: value })} placeholder="Telefono" keyboardType="phone-pad" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.whatsapp} onChangeText={(value) => setOrderForm({ ...orderForm, whatsapp: value })} placeholder="WhatsApp" keyboardType="phone-pad" />
+          </QuestionCard>
+        ) : null}
+
+        {orderEditorSection === "device" ? (
+          <QuestionCard title="Dispositivo y falla" description="Marca, modelo, serie y descripcion del problema." palette={palette}>
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.brand} onChangeText={(value) => setOrderForm({ ...orderForm, brand: value })} placeholder="Marca" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.model} onChangeText={(value) => setOrderForm({ ...orderForm, model: value })} placeholder="Modelo" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.imei} onChangeText={(value) => setOrderForm({ ...orderForm, imei: value })} placeholder="IMEI o serie" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.issue} onChangeText={(value) => setOrderForm({ ...orderForm, issue: value })} placeholder="Falla reportada" multiline />
+          </QuestionCard>
+        ) : null}
+
+        {orderEditorSection === "financial" ? (
+          <QuestionCard title="Cobro y entrega" description="Monto, anticipo y fecha promesa para cerrar la orden." palette={palette}>
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(orderForm.estimatedTotal)} onChangeText={(value) => setOrderForm({ ...orderForm, estimatedTotal: Number(value || 0) })} placeholder="Total estimado" keyboardType="numeric" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(orderForm.deposit)} onChangeText={(value) => setOrderForm({ ...orderForm, deposit: Number(value || 0) })} placeholder="Anticipo" keyboardType="numeric" />
+            <Text style={[styles.cardText, cardTextThemeStyle]}>Fecha promesa rapida</Text>
+            <View style={styles.compactActionRow}>
+              {[
+                { label: "Hoy", days: 0 },
+                { label: "Mañana", days: 1 },
+                { label: "+2 dias", days: 2 },
+                { label: "+3 dias", days: 3 },
+                { label: "+7 dias", days: 7 },
+              ].map((option) => (
+                <Pressable key={option.label} style={[styles.compactActionButton, secondaryButtonThemeStyle]} onPress={() => setQuickEta(option.days)}>
+                  <Text style={[styles.compactActionText, secondaryTextThemeStyle]}>{option.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={orderForm.eta} onChangeText={(value) => setOrderForm({ ...orderForm, eta: value })} placeholder="Fecha promesa YYYY-MM-DD" />
+          </QuestionCard>
+        ) : null}
+
+        <View style={styles.compactActionRow}>
+          <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, styles.primaryButtonCompact, isBusy && styles.buttonDisabled]} onPress={onSaveOrder} disabled={isBusy}>
+            <Text style={[styles.primaryText, primaryTextThemeStyle]}>{orderForm.id ? "Guardar orden" : "Crear orden"}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.secondaryButton, secondaryButtonThemeStyle, styles.primaryButtonCompact]}
+            onPress={() => {
+              setActivePopup(null);
+              setShowOrderComposer(false);
+              setOrderEditorSection("customer");
+            }}
+          >
+            <Text style={[styles.secondaryText, secondaryTextThemeStyle]}>Volver al panel</Text>
+          </Pressable>
+        </View>
+      </PopupWindow>
+
+      <PopupWindow
+        visible={activePopup === "inventory"}
+        title={inventoryForm.id ? "Editar repuesto" : "Nuevo repuesto"}
+        description="Mantén el panel libre y captura inventario en una ventana aparte."
+        palette={palette}
+        onClose={() => setActivePopup(null)}
+      >
+        <QuestionCard title="Identificacion del repuesto" description="Nombre, SKU y categoria en un solo bloque." palette={palette}>
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.name} onChangeText={(v) => setInventoryForm({ ...inventoryForm, name: v })} placeholder="Nombre" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.sku} onChangeText={(v) => setInventoryForm({ ...inventoryForm, sku: v })} placeholder="SKU" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.category} onChangeText={(v) => setInventoryForm({ ...inventoryForm, category: v })} placeholder="Categoria" />
+        </QuestionCard>
+        <QuestionCard title="Stock y costo" description="Define existencias y costo sin llenar toda la pantalla principal." palette={palette}>
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(inventoryForm.stock)} onChangeText={(v) => setInventoryForm({ ...inventoryForm, stock: Number(v || 0) })} placeholder="Stock" keyboardType="numeric" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(inventoryForm.minStock)} onChangeText={(v) => setInventoryForm({ ...inventoryForm, minStock: Number(v || 0) })} placeholder="Minimo" keyboardType="numeric" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={displayNumberInput(inventoryForm.cost)} onChangeText={(v) => setInventoryForm({ ...inventoryForm, cost: Number(v || 0) })} placeholder="Costo" keyboardType="numeric" />
+        </QuestionCard>
+        <QuestionCard title="Proveedor vinculado" description="Relaciona la pieza con el proveedor que ya usas." palette={palette}>
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={inventoryForm.supplierId} onChangeText={(v) => setInventoryForm({ ...inventoryForm, supplierId: v })} placeholder="ID proveedor" />
+        </QuestionCard>
+        <View style={styles.compactActionRow}>
+          <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, styles.primaryButtonCompact, isBusy && styles.buttonDisabled]} onPress={onSaveInventory} disabled={isBusy}>
+            <Text style={[styles.primaryText, primaryTextThemeStyle]}>{inventoryForm.id ? "Guardar cambios" : "Agregar repuesto"}</Text>
+          </Pressable>
+          {inventoryForm.id ? (
+            <Pressable style={[styles.secondaryButton, dangerButtonThemeStyle, styles.primaryButtonCompact, isBusy && styles.buttonDisabled]} onPress={onDeleteInventory} disabled={isBusy}>
+              <Text style={[styles.secondaryText, dangerTextThemeStyle]}>Eliminar repuesto</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </PopupWindow>
+
+      {settingsForm ? (
+        <PopupWindow
+          visible={activePopup === "business"}
+          title="Editar negocio"
+          description="Ajusta identidad, contacto y preferencias sin cargar la vista principal."
+          palette={palette}
+          onClose={() => setActivePopup(null)}
+        >
+          <QuestionCard title="Marca comercial" description="Los datos visibles del taller viven en un bloque separado." palette={palette}>
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.businessName} onChangeText={(value) => setSettingsForm({ ...settingsForm, businessName: value })} placeholder="Nombre del negocio" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.branchName} onChangeText={(value) => setSettingsForm({ ...settingsForm, branchName: value })} placeholder="Sucursal" />
+          </QuestionCard>
+          <QuestionCard title="Contacto y ubicacion" description="Telefono, WhatsApp y direccion para tickets y seguimiento." palette={palette}>
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.phone} onChangeText={(value) => setSettingsForm({ ...settingsForm, phone: value })} placeholder="Telefono" keyboardType="phone-pad" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.whatsapp} onChangeText={(value) => setSettingsForm({ ...settingsForm, whatsapp: value })} placeholder="WhatsApp" keyboardType="phone-pad" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.address} onChangeText={(value) => setSettingsForm({ ...settingsForm, address: value })} placeholder="Direccion" />
+            <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={settingsForm.ticketHeader} onChangeText={(value) => setSettingsForm({ ...settingsForm, ticketHeader: value })} placeholder="Encabezado de ticket" />
+          </QuestionCard>
+          <QuestionCard title="Preferencias" description="Controla tema y seguimiento desde una sola tarjeta." palette={palette}>
+            <View style={styles.switchRow}>
+              <View style={styles.switchCopy}>
+                <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Modo oscuro</Text>
+                <Text style={[styles.cardText, cardTextThemeStyle]}>Activa una apariencia oscura para toda la app.</Text>
+              </View>
+              <Switch value={settingsForm.themeMode === "dark"} onValueChange={(value) => setSettingsForm({ ...settingsForm, themeMode: value ? "dark" : "light" })} />
+            </View>
+            <View style={styles.switchRow}>
+              <View style={styles.switchCopy}>
+                <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Seguimiento publico</Text>
+                <Text style={[styles.cardText, cardTextThemeStyle]}>Permite compartir la liga de seguimiento al cliente.</Text>
+              </View>
+              <Switch value={settingsForm.publicTracking} onValueChange={(value) => setSettingsForm({ ...settingsForm, publicTracking: value })} />
+            </View>
+          </QuestionCard>
+          <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onSaveSettings} disabled={isBusy}>
+            <Text style={[styles.primaryText, primaryTextThemeStyle]}>Guardar negocio</Text>
+          </Pressable>
+        </PopupWindow>
+      ) : null}
+
+      <PopupWindow
+        visible={activePopup === "user"}
+        title="Alta manual de usuario"
+        description="Crea accesos internos desde un submenu emergente."
+        palette={palette}
+        onClose={() => setActivePopup(null)}
+      >
+        <QuestionCard title="Datos de acceso" description="Completa nombre, correo, rol y contrasena." palette={palette}>
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.name} onChangeText={(v) => setNewUser({ ...newUser, name: v })} placeholder="Nombre" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.email} onChangeText={(v) => setNewUser({ ...newUser, email: v })} placeholder="Correo" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.role} onChangeText={(v) => setNewUser({ ...newUser, role: v })} placeholder="Rol" />
+          <TextInput style={[styles.input, inputThemeStyle]} placeholderTextColor={placeholderColor} value={newUser.password} onChangeText={(v) => setNewUser({ ...newUser, password: v })} placeholder="Contrasena" secureTextEntry />
+        </QuestionCard>
+        <Pressable style={[styles.primaryButton, primaryButtonThemeStyle, isBusy && styles.buttonDisabled]} onPress={onCreateUser} disabled={isBusy}>
+          <Text style={[styles.primaryText, primaryTextThemeStyle]}>Crear usuario</Text>
+        </Pressable>
+      </PopupWindow>
     </SafeAreaView>
   );
 }
@@ -1980,6 +2234,61 @@ function Card({
       <Text style={[styles.cardText, { color: palette.textMuted }]}>{title}</Text>
       <Text style={[styles.metricValue, { color: palette.text }]}>{value}</Text>
     </View>
+  );
+}
+
+function QuestionCard({
+  title,
+  description,
+  palette,
+  children,
+}: React.PropsWithChildren<{
+  title: string;
+  description?: string;
+  palette: ReturnType<typeof createPalette>;
+}>) {
+  return (
+    <View style={[styles.questionCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+      <View style={styles.questionCardHead}>
+        <Text style={[styles.questionCardTitle, { color: palette.text }]}>{title}</Text>
+        {description ? <Text style={[styles.questionCardText, { color: palette.textMuted }]}>{description}</Text> : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function PopupWindow({
+  visible,
+  title,
+  description,
+  palette,
+  onClose,
+  children,
+}: React.PropsWithChildren<{
+  visible: boolean;
+  title: string;
+  description?: string;
+  palette: ReturnType<typeof createPalette>;
+  onClose: () => void;
+}>) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.modalCard, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+          <View style={styles.modalHeader}>
+            <View style={styles.modalHeaderCopy}>
+              <Text style={[styles.modalTitle, { color: palette.text }]}>{title}</Text>
+              {description ? <Text style={[styles.modalText, { color: palette.textMuted }]}>{description}</Text> : null}
+            </View>
+            <Pressable style={[styles.modalCloseButton, { backgroundColor: palette.secondary, borderColor: palette.border }]} onPress={onClose}>
+              <Text style={[styles.modalCloseText, { color: palette.secondaryText }]}>Cerrar</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalBody}>{children}</ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -2217,6 +2526,20 @@ const styles = StyleSheet.create({
   ghostText: { color: "#152033", fontWeight: "700" },
   navRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   navRowWeb: { gap: 10 },
+  compactActionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  compactActionButton: {
+    minHeight: 42,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  compactActionText: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
   navButton: { paddingHorizontal: 14, paddingVertical: 11, borderRadius: 999, borderWidth: 1 },
   navButtonWeb: { minWidth: 122, alignItems: "center" },
   navButtonActive: { backgroundColor: "#1152d4" },
@@ -2329,6 +2652,85 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
     elevation: 2,
+  },
+  quickStarterCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+    gap: 12,
+  },
+  primaryButtonCompact: {
+    flexGrow: 1,
+    minWidth: 150,
+  },
+  questionCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  questionCardHead: {
+    gap: 3,
+  },
+  questionCardTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  questionCardText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(9, 20, 35, 0.46)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 760,
+    maxHeight: "88%",
+    borderRadius: 26,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 14,
+  },
+  modalHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  modalText: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  modalCloseButton: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  modalCloseText: {
+    fontWeight: "800",
+    fontSize: 14,
+  },
+  modalBody: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    gap: 12,
   },
   switchRow: {
     flexDirection: "row",

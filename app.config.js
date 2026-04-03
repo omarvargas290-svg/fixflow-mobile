@@ -2,9 +2,9 @@ const projectId = "225e5626-02d1-4169-a759-76c2872dcb40";
 
 module.exports = () => ({
   expo: {
-    name: "FixFlow Mobile",
+    name: "FixFlow Taller",
     slug: "fixflow-mobile",
-    version: "1.0.0",
+    version: "1.0.1",
     runtimeVersion: {
       policy: "appVersion",
     },
