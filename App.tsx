@@ -1,4 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
+
+declare const require: (name: string) => any;
+const { parseVoiceOrder } = require("./voice-order-parser");
+
 import {
   ActivityIndicator,
   Alert,
@@ -501,6 +505,8 @@ function AppContent() {
     confirmPassword: "",
   });
   const [orderForm, setOrderForm] = useState<Order>(createEmptyOrder());
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceMissing, setVoiceMissing] = useState<string[]>([]);
   const [inventoryForm, setInventoryForm] = useState<InventoryItem>({
     id: "",
     name: "",
@@ -853,6 +859,32 @@ function AppContent() {
     } finally {
       setIsBusy(false);
     }
+  }
+
+  function applyVoiceDraft() {
+    const parsed = parseVoiceOrder(voiceTranscript);
+    if (!parsed.transcript) {
+      Alert.alert("Asistente por voz", "Dicta con el teclado de voz de Android o escribe los datos.");
+      return;
+    }
+    setOrderForm((previous) => ({
+      ...previous,
+      ...parsed.order,
+      customer: parsed.order.customer || previous.customer,
+      phone: parsed.order.phone || previous.phone,
+      whatsapp: parsed.order.whatsapp || previous.whatsapp,
+      brand: parsed.order.brand || previous.brand,
+      model: parsed.order.model || previous.model,
+      imei: parsed.order.imei || previous.imei,
+      issue: parsed.order.issue || previous.issue,
+      estimatedTotal: parsed.order.estimatedTotal || previous.estimatedTotal,
+      deposit: parsed.order.deposit || previous.deposit,
+    }));
+    setVoiceMissing(parsed.missing);
+    setView("orders");
+    setShowOrderComposer(true);
+    setOrderEditorSection("customer");
+    Alert.alert("Borrador preparado", parsed.missing.length ? "Revisa o completa: " + parsed.missing.join(", ") : "Revisa la orden antes de guardarla.");
   }
 
   async function onSaveOrder() {
@@ -1445,6 +1477,26 @@ function AppContent() {
                 <Text style={[styles.secondaryText, neutralTextThemeStyle]}>Actualizar panel</Text>
               </Pressable>
             </View>
+          </View>
+
+          <View style={[styles.featurePanel, cardSurfaceStyle, { marginBottom: 12 }]}>
+            <Text style={[styles.cardTitle, cardTitleThemeStyle]}>Asistente de ordenes por voz — Fase 1</Text>
+            <Text style={[styles.cardText, cardTextThemeStyle]}>
+              Usa el microfono del teclado de Android para dictar. En Windows puedes escribir o pegar el dictado.
+              Ejemplo: Cliente Juan Perez, telefono 8123456789, equipo Samsung A56, falla pantalla rota, costo 1200, anticipo 300.
+            </Text>
+            <TextInput
+              style={[styles.input, inputThemeStyle, { minHeight: 94, textAlignVertical: "top" }]}
+              value={voiceTranscript}
+              onChangeText={setVoiceTranscript}
+              multiline
+              placeholder="Dicta o escribe los datos de la orden..."
+              placeholderTextColor={placeholderColor}
+            />
+            <Pressable style={[styles.primaryButton, primaryButtonThemeStyle]} onPress={applyVoiceDraft}>
+              <Text style={[styles.primaryText, primaryTextThemeStyle]}>Interpretar y revisar orden</Text>
+            </Pressable>
+            {voiceMissing.length > 0 ? <Text style={[styles.cardText, { color: palette.warning }]}>Pendiente: {voiceMissing.join(", ")}</Text> : null}
           </View>
 
           {isBusy && (
